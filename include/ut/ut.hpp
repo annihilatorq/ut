@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <source_location>
+#include <string>
 #include <string_view>
 
 namespace ut
@@ -40,6 +41,25 @@ namespace ut
       {
          using type = T;
       };
+
+      [[nodiscard]] inline std::string_view get_runnable_tests_list()
+      {
+         static const std::string filter = [] {
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma warning(suppress : 4996)
+            const char* const env = std::getenv("UT_RUN");
+#else
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+            const char* const env = std::getenv("UT_RUN");
+#pragma GCC diagnostic pop
+#endif
+
+            return env != nullptr ? std::string{env} : std::string{};
+         }();
+
+         return filter;
+      }
    }
 
    template <size_t Size>
@@ -231,10 +251,7 @@ namespace ut
             }
          }
          else {
-            static const std::string_view filter = []() -> std::string_view {
-               if (const char* env = std::getenv("UT_RUN")) return env;
-               return {};
-            }();
+            std::string_view filter = detail::get_runnable_tests_list();
 
             auto matches_filter = [](std::string_view test_name, std::string_view f) {
                if (f.empty()) return true;
