@@ -10,6 +10,11 @@
 //   Single test:    UT_RUN="my test" ./my_tests
 //   Multiple tests: UT_RUN="[test1,test2,test3]" ./my_tests
 //   If UT_RUN is not set, all tests run (default behavior).
+module;
+
+#include <typeinfo>
+#include <version>
+
 export module ut;
 
 import std;
