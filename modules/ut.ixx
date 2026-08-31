@@ -369,8 +369,8 @@ namespace ut
    struct runner
    {
       template <class Test>
-      constexpr auto on(Test test, const std::string_view file_name, std::uint_least32_t line, const std::string_view name)
-         -> bool
+      constexpr auto on(Test test, const std::string_view file_name, std::uint_least32_t line,
+                        const std::string_view name) -> bool
       {
          if (std::is_constant_evaluated()) {
             if constexpr (requires { requires detail::is_mutable_lambda_v<decltype(&Test::operator())>; }) {
