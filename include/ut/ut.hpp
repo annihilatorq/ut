@@ -290,6 +290,10 @@ namespace ut
          return std::string{ec.category().name()} + ':' + std::to_string(ec.value()) + " (" + ec.message() + ')';
       }
 
+      // Kept out of the templated .run_guarded() since GCC checks typeid
+      // where a template is instantiated
+      [[nodiscard]] inline std::string_view exception_type_name(const std::exception& e) { return typeid(e).name(); }
+
       // Runs a test body and turns any exception escaping it into a reported
       // failure instead of letting it reach std::terminate
       template <class Reporter, class Test>
@@ -377,7 +381,7 @@ namespace ut
          catch (const std::exception& e) {
             // Didn't match any specific exception, so the dynamic type is
             // all that is left for identification
-            report(typeid(e).name(), e.what());
+            report(exception_type_name(e), e.what());
          }
          catch (...) {
             report("unknown exception", {});
