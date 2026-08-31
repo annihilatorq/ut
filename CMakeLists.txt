@@ -118,6 +118,18 @@ endif()
 
 target_compile_features(${PROJECT_NAME}_${PROJECT_NAME} ${UT_LIB_TYPE} cxx_std_23)
 
+# GCC keeps std::stacktrace in a library of its own. Only the compiler's own
+# directories are searched (so that an MSVC build cannot take MinGW's copy)
+find_library(UT_STDCXXEXP_LIBRARY
+  NAMES stdc++exp
+  PATHS ${CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES}
+  NO_DEFAULT_PATH
+)
+
+if(UT_STDCXXEXP_LIBRARY)
+  target_link_libraries(${PROJECT_NAME}_${PROJECT_NAME} ${UT_LIB_TYPE} ${UT_STDCXXEXP_LIBRARY})
+endif()
+
 if(UT_ENABLE_MODULES)
   target_sources(${PROJECT_NAME}_${PROJECT_NAME}
     PUBLIC

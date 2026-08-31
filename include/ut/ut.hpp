@@ -23,7 +23,7 @@
 
 #if __cpp_exceptions
 // Required to catch more specific and accurate exception types instead of
-// trying to catch only generic std::exception base
+// trying to catch only the generic std::exception base
 #include <any>
 #include <exception>
 #include <functional>
@@ -37,6 +37,28 @@
 #include <variant>
 #if __has_include(<expected>)
 #include <expected>
+#endif
+#endif
+
+#if !defined(UT_NO_CRASH_HANDLER) && !defined(__SANITIZE_ADDRESS__) && !defined(__SANITIZE_THREAD__)
+#if !defined(__has_feature)
+#define UT_CRASH_HANDLER
+#elif !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer) && !__has_feature(memory_sanitizer)
+// Sanitizer installs its own handler and reports way more info
+#define UT_CRASH_HANDLER
+#endif
+#endif
+
+#if defined(UT_CRASH_HANDLER)
+#include <csignal>
+#include <version>
+#if defined(__cpp_lib_stacktrace)
+#include <stacktrace>
+#endif
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
 #endif
 #endif
 
@@ -284,6 +306,10 @@ namespace ut
 
    namespace detail
    {
+#if defined(UT_CRASH_HANDLER)
+      void install_crash_handler();
+#endif
+
 #if __cpp_exceptions
       [[nodiscard]] inline std::string describe(const std::error_code& ec)
       {
@@ -407,6 +433,10 @@ namespace ut
             }
          }
          else {
+#if defined(UT_CRASH_HANDLER)
+            detail::install_crash_handler();
+#endif
+
             std::string_view filter = detail::get_runnable_tests_list();
 
             auto matches_filter = [](std::string_view test_name, std::string_view f) {
@@ -475,6 +505,203 @@ namespace ut
       ut::reporter<decltype(outputter)> reporter{outputter};
       ut::runner<decltype(reporter)> runner{reporter};
    } cfg;
+
+   namespace detail
+   {
+#if defined(UT_CRASH_HANDLER)
+      inline char crash_buffer[512];
+      inline size_t crash_length;
+
+      inline void crash_append(const std::string_view text)
+      {
+         for (const char c : text) {
+            if (crash_length < sizeof(crash_buffer)) {
+               crash_buffer[crash_length++] = c;
+            }
+         }
+      }
+
+      inline void crash_append_dec(size_t value)
+      {
+         char digits[20];
+         size_t count = 0;
+         do {
+            digits[count++] = static_cast<char>('0' + value % 10);
+            value /= 10;
+         } while (value != 0);
+
+         while (count != 0) {
+            crash_append(std::string_view{&digits[--count], 1});
+         }
+      }
+
+      inline void crash_append_hex(std::uintptr_t value)
+      {
+         char digits[2 * sizeof(value)];
+         size_t count = 0;
+         do {
+            digits[count++] = "0123456789abcdef"[value % 16];
+            value /= 16;
+         } while (value != 0);
+
+         crash_append("0x");
+         while (count != 0) {
+            crash_append(std::string_view{&digits[--count], 1});
+         }
+      }
+
+      inline void crash_begin()
+      {
+         crash_length = 0;
+         if (cfg.outputter.initial_new_line == '\n') {
+            crash_append("\n");
+         }
+         crash_append("CRASHED");
+         if (cfg.reporter.current != 0) {
+            crash_append(" \"");
+            crash_append(cfg.outputter.current_test.name);
+            crash_append("\"");
+         }
+         crash_append(" ");
+      }
+
+      inline void crash_flush()
+      {
+#if defined(_WIN32)
+         _write(2, crash_buffer, static_cast<unsigned int>(crash_length));
+#else
+         const ssize_t written = write(2, crash_buffer, crash_length);
+         static_cast<void>(written);
+#endif
+         crash_length = 0;
+      }
+
+#if defined(__cpp_lib_stacktrace)
+      [[nodiscard]] inline bool crash_is_dispatch_frame(const std::stacktrace_entry& entry)
+      {
+         return entry.description().contains("KiUserExceptionDispatcher") ||
+                entry.description().contains("__restore_rt") || entry.source_file().contains("libc_sigaction");
+      }
+
+      inline void crash_append_stacktrace()
+      {
+         const std::stacktrace trace = std::stacktrace::current(1);
+
+         size_t first = 0;
+         for (size_t index = 0; index != trace.size(); ++index) {
+            if (crash_is_dispatch_frame(trace[index])) {
+               first = index + 1;
+            }
+         }
+
+         constexpr size_t frames_limit = 32;
+         for (size_t index = first; index != trace.size() && index - first != frames_limit; ++index) {
+            crash_append("  ");
+            crash_append(trace[index].description());
+
+            const std::string file = trace[index].source_file();
+            if (not file.empty()) {
+               crash_append(" (");
+               crash_append(file);
+               crash_append(":");
+               crash_append_dec(trace[index].source_line());
+               crash_append(")");
+            }
+            crash_append("\n");
+            crash_flush();
+         }
+      }
+#endif
+
+      inline void crash_end()
+      {
+         crash_append(" (");
+         crash_append_dec(cfg.reporter.summary.tests[events::summary::PASSED]);
+         crash_append(" passed)\n");
+
+         // Stack walking allocates, which is not safe inside a signal
+         // handler, so it can be lost
+         crash_flush();
+#if defined(__cpp_lib_stacktrace)
+         crash_append_stacktrace();
+#endif
+      }
+
+      [[nodiscard]] inline std::string_view crash_signal_name(const int number)
+      {
+         switch (number) {
+         case SIGSEGV:
+            return "SIGSEGV";
+#if defined(SIGBUS)
+         case SIGBUS:
+            return "SIGBUS";
+#endif
+         case SIGFPE:
+            return "SIGFPE";
+         case SIGILL:
+            return "SIGILL";
+         case SIGABRT:
+            return "SIGABRT";
+         default:
+            return "signal";
+         }
+      }
+
+      // Re-raise rather than exit, so that the debugger and the exit status
+      // stay the same. All we do is "report" that a crash happened
+#if defined(_WIN32)
+      inline void crash_signal_handler(const int number)
+      {
+         crash_begin();
+         crash_append(crash_signal_name(number));
+         crash_end();
+
+         std::signal(number, SIG_DFL);
+         std::raise(number);
+      }
+#else
+      inline void crash_signal_handler(const int number, siginfo_t* info, void*)
+      {
+         crash_begin();
+         crash_append(crash_signal_name(number));
+
+         if (info != nullptr && (number == SIGSEGV || number == SIGBUS || number == SIGFPE || number == SIGILL)) {
+            crash_append(" at ");
+            crash_append_hex(reinterpret_cast<std::uintptr_t>(info->si_addr));
+         }
+         crash_end();
+
+         std::signal(number, SIG_DFL);
+         std::raise(number);
+      }
+#endif
+
+      // Not using a static constructor here, because suites are static too,
+      // and the order between TUs is unspecified
+      inline void install_crash_handler()
+      {
+         [[maybe_unused]] static const bool installed = [] {
+#if defined(_WIN32)
+            const int numbers[] = {SIGSEGV, SIGFPE, SIGILL, SIGABRT};
+            for (const int number : numbers) {
+               std::signal(number, &crash_signal_handler);
+            }
+#else
+            struct sigaction action = {};
+            action.sa_sigaction = &crash_signal_handler;
+            action.sa_flags = SA_SIGINFO;
+            sigemptyset(&action.sa_mask);
+
+            const int numbers[] = {SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGABRT};
+            for (const int number : numbers) {
+               sigaction(number, &action, nullptr);
+            }
+#endif
+            return true;
+         }();
+      }
+#endif
+   }
 
    constexpr struct
    {
