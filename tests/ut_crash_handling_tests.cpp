@@ -1,6 +1,7 @@
 #include <version>
 
 #ifndef UT_ENABLE_MODULES
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -17,11 +18,25 @@ import std;
 using namespace ut;
 
 volatile int* null_pointer = nullptr;
-volatile int zero = 0;
 
 namespace
 {
    std::string executable;
+
+   struct handled_signal
+   {
+      std::string_view name;
+      int number;
+   };
+
+   constexpr handled_signal handled_signals[] = {
+      {"SIGFPE", SIGFPE},
+      {"SIGILL", SIGILL},
+#if defined(SIGBUS)
+      {"SIGBUS", SIGBUS},
+#endif
+      {"SIGABRT", SIGABRT},
+   };
 
    [[nodiscard]] std::string output_of(const std::string_view fault)
    {
@@ -43,11 +58,14 @@ namespace
       if (which == "read") {
          test("reads through a null pointer") = [] { expect(*null_pointer == 0); };
       }
-      if (which == "divide") {
-         test("divides by zero") = [] { expect(1 / zero == 0); };
-      }
       if (which == "abort") {
          test("calls abort") = [] { std::abort(); };
+      }
+
+      for (const handled_signal& signal : handled_signals) {
+         if (which == signal.name) {
+            test("raises a signal") = [number = signal.number] { std::raise(number); };
+         }
       }
    }
 }
@@ -73,13 +91,14 @@ int main(int argc, char** argv)
    "prints stack frames beneath the report"_test = [&] { expect(read.contains("\n  ")) << read; };
 #endif
 
-#if !defined(_MSC_VER)
-   // MSVC runtime doesn't raise SIGFPE for division by zero
-   "reports SIGFPE for integer division by zero"_test = [] {
-      const std::string output = output_of("divide");
-      expect(output.contains("CRASHED \"divides by zero\" SIGFPE")) << output;
+   "reports every signal it installs a handler for"_test = [] {
+      for (const handled_signal& signal : handled_signals) {
+         const std::string output = output_of(signal.name);
+         expect(output.contains("CRASHED \"raises a signal\" " + std::string{signal.name})) << signal.name << output;
+      }
    };
 
+#if !defined(_MSC_VER)
    // Debugger catches it before it reaches our handler
    "reports SIGABRT for abort"_test = [] {
       const std::string output = output_of("abort");

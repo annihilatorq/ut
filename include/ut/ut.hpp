@@ -665,7 +665,7 @@ namespace ut
          crash_begin();
          crash_append(crash_signal_name(number));
 
-         if (info != nullptr && (number == SIGSEGV || number == SIGBUS || number == SIGFPE || number == SIGILL)) {
+         if (info != nullptr && info->si_code > 0) {
             crash_append(" at ");
             crash_append_hex(reinterpret_cast<std::uintptr_t>(info->si_addr));
          }
