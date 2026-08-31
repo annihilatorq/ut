@@ -18,7 +18,27 @@
 #include <cstdlib>
 #include <iostream>
 #include <source_location>
+#include <string>
 #include <string_view>
+
+#if __cpp_exceptions
+// Required to catch more specific and accurate exception types instead of
+// trying to catch only generic std::exception base
+#include <any>
+#include <exception>
+#include <functional>
+#include <ios>
+#include <memory>
+#include <new>
+#include <optional>
+#include <stdexcept>
+#include <system_error>
+#include <typeinfo>
+#include <variant>
+#if __has_include(<expected>)
+#include <expected>
+#endif
+#endif
 
 namespace ut
 {
@@ -40,6 +60,25 @@ namespace ut
       {
          using type = T;
       };
+
+      [[nodiscard]] inline std::string_view get_runnable_tests_list()
+      {
+         static const std::string filter = [] {
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma warning(suppress : 4996)
+            const char* const env = std::getenv("UT_RUN");
+#else
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+            const char* const env = std::getenv("UT_RUN");
+#pragma GCC diagnostic pop
+#endif
+
+            return env != nullptr ? std::string{env} : std::string{};
+         }();
+
+         return filter;
+      }
    }
 
    template <size_t Size>
@@ -88,6 +127,12 @@ namespace ut
       };
       struct fatal
       {};
+      struct exception
+      {
+         std::string_view type{};
+         std::string_view what{};
+         std::string_view info{};
+      };
       template <class Msg>
       struct log
       {
@@ -115,12 +160,7 @@ namespace ut
       constexpr auto on(const events::assertion& event)
       {
          if (not event.passed && not std::is_constant_evaluated()) {
-            if (initial_new_line == '\n') {
-               os << initial_new_line;
-            }
-            else {
-               initial_new_line = '\n';
-            }
+            begin_failure_line();
             os << "FAILED \"" << current_test.name << "\" ";
             const auto n = event.file_name.size();
             const auto start = n <= 32 ? 0 : n - 32;
@@ -128,6 +168,20 @@ namespace ut
                os << "...";
             }
             os << event.file_name.substr(start, n) << ":" << event.line << '\n';
+         }
+      }
+      constexpr auto on(const events::exception& event)
+      {
+         if (not std::is_constant_evaluated()) {
+            begin_failure_line();
+            os << "FAILED \"" << current_test.name << "\" threw " << event.type;
+            if (not event.what.empty()) {
+               os << ": " << event.what;
+            }
+            if (not event.info.empty()) {
+               os << " [" << event.info << ']';
+            }
+            os << '\n';
          }
       }
       constexpr auto on(const events::fatal&) {}
@@ -153,6 +207,15 @@ namespace ut
                << event.tests[summary::COMPILE_TIME] << " compile-time)\n"
                << "asserts: " << (event.asserts[summary::PASSED] + event.asserts[summary::FAILED]) << " ("
                << event.asserts[summary::PASSED] << " passed, " << event.asserts[summary::FAILED] << " failed)\n";
+         }
+      }
+      constexpr auto begin_failure_line()
+      {
+         if (initial_new_line == '\n') {
+            os << initial_new_line;
+         }
+         else {
+            initial_new_line = '\n';
          }
       }
 
@@ -192,6 +255,11 @@ namespace ut
          }
          outputter.on(event);
       }
+      constexpr auto on(const events::exception& event)
+      {
+         ++summary.asserts[events::summary::FAILED];
+         outputter.on(event);
+      }
       constexpr auto on(const events::fatal& event)
       {
          ++summary.tests[events::summary::FAILED];
@@ -214,6 +282,114 @@ namespace ut
       size_t current{};
    };
 
+   namespace detail
+   {
+#if __cpp_exceptions
+      [[nodiscard]] inline std::string describe(const std::error_code& ec)
+      {
+         return std::string{ec.category().name()} + ':' + std::to_string(ec.value()) + " (" + ec.message() + ')';
+      }
+
+      // Kept out of the templated .run_guarded() since GCC checks typeid
+      // where a template is instantiated
+      [[nodiscard]] inline std::string_view exception_type_name(const std::exception& e) { return typeid(e).name(); }
+
+      // Runs a test body and turns any exception escaping it into a reported
+      // failure instead of letting it reach std::terminate
+      template <class Reporter, class Test>
+      void run_guarded(Reporter& reporter, Test& test)
+      {
+         const auto report = [&](std::string_view type, std::string_view what, std::string_view info = {}) {
+            reporter.on(events::exception{type, what, info});
+         };
+
+         try {
+            test();
+         }
+         // std::logic_error-s
+         catch (const std::domain_error& e) {
+            report("std::domain_error", e.what());
+         }
+         catch (const std::invalid_argument& e) {
+            report("std::invalid_argument", e.what());
+         }
+         catch (const std::length_error& e) {
+            report("std::length_error", e.what());
+         }
+         catch (const std::out_of_range& e) {
+            report("std::out_of_range", e.what());
+         }
+         catch (const std::logic_error& e) {
+            report("std::logic_error", e.what());
+         }
+         // std::runtime_error-s
+         catch (const std::ios_base::failure& e) {
+            report("std::ios_base::failure", e.what(), describe(e.code()));
+         }
+         catch (const std::system_error& e) {
+            report("std::system_error", e.what(), describe(e.code()));
+         }
+         catch (const std::range_error& e) {
+            report("std::range_error", e.what());
+         }
+         catch (const std::overflow_error& e) {
+            report("std::overflow_error", e.what());
+         }
+         catch (const std::underflow_error& e) {
+            report("std::underflow_error", e.what());
+         }
+         catch (const std::runtime_error& e) {
+            report("std::runtime_error", e.what());
+         }
+         // Allocation, RTTI and bad-access
+         catch (const std::bad_array_new_length& e) {
+            report("std::bad_array_new_length", e.what());
+         }
+         catch (const std::bad_alloc& e) {
+            report("std::bad_alloc", e.what());
+         }
+         catch (const std::bad_any_cast& e) {
+            report("std::bad_any_cast", e.what());
+         }
+         catch (const std::bad_cast& e) {
+            report("std::bad_cast", e.what());
+         }
+         catch (const std::bad_typeid& e) {
+            report("std::bad_typeid", e.what());
+         }
+         catch (const std::bad_optional_access& e) {
+            report("std::bad_optional_access", e.what());
+         }
+         catch (const std::bad_variant_access& e) {
+            report("std::bad_variant_access", e.what());
+         }
+#if defined(__cpp_lib_expected)
+         catch (const std::bad_expected_access<void>& e) {
+            report("std::bad_expected_access", e.what());
+         }
+#endif
+         catch (const std::bad_weak_ptr& e) {
+            report("std::bad_weak_ptr", e.what());
+         }
+         catch (const std::bad_function_call& e) {
+            report("std::bad_function_call", e.what());
+         }
+         catch (const std::bad_exception& e) {
+            report("std::bad_exception", e.what());
+         }
+         // Fallbacks
+         catch (const std::exception& e) {
+            // Didn't match any specific exception, so the dynamic type is
+            // all that is left for identification
+            report(exception_type_name(e), e.what());
+         }
+         catch (...) {
+            report("unknown exception", {});
+         }
+      }
+#endif
+   }
+
    template <class Reporter>
    struct runner
    {
@@ -231,10 +407,7 @@ namespace ut
             }
          }
          else {
-            static const std::string_view filter = []() -> std::string_view {
-               if (const char* env = std::getenv("UT_RUN")) return env;
-               return {};
-            }();
+            std::string_view filter = detail::get_runnable_tests_list();
 
             auto matches_filter = [](std::string_view test_name, std::string_view f) {
                if (f.empty()) return true;
@@ -272,7 +445,11 @@ namespace ut
 #endif
 
             reporter.on(events::test_begin<events::mode::run_time>{file_name, line, name});
+#if __cpp_exceptions
+            detail::run_guarded(reporter, test);
+#else
             test();
+#endif
             reporter.on(events::test_end<events::mode::run_time>{file_name, line, name});
          }
          return true;

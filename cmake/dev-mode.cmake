@@ -79,6 +79,29 @@ set_tests_properties(ut_run_no_match PROPERTIES
    PASS_REGULAR_EXPRESSION "tests: 0 \\(0 passed"
 )
 
+# Exception reporting tests: an unhandled exception inside a test body must
+# be reported and the run must continue, rather than reaching std::terminate
+add_executable(ut_exception_handling_tests "${PROJECT_SOURCE_DIR}/tests/ut_exception_handling_tests.cpp")
+target_link_libraries(ut_exception_handling_tests PRIVATE ${PROJECT_NAME}::${PROJECT_NAME})
+
+# Test: all 6 throwing tests are reported as failures
+add_test(NAME ut_exception_reported COMMAND ut_exception_handling_tests)
+set_tests_properties(ut_exception_reported PROPERTIES
+   PASS_REGULAR_EXPRESSION "tests: 8 [(]2 passed, 6 failed"
+)
+
+# Test: an exception is named by its most derived type
+add_test(NAME ut_exception_precise_type COMMAND ut_exception_handling_tests)
+set_tests_properties(ut_exception_precise_type PROPERTIES
+   PASS_REGULAR_EXPRESSION "threw std::system_error: .*[[]generic:"
+)
+
+# Test: throw of something outside the std::exception base is reported too
+add_test(NAME ut_exception_non_std COMMAND ut_exception_handling_tests)
+set_tests_properties(ut_exception_non_std PROPERTIES
+   PASS_REGULAR_EXPRESSION "threw unknown exception"
+)
+
 if (UT_ENABLE_MODULES)
   add_executable(ut_module_consumer_tests "${PROJECT_SOURCE_DIR}/tests/ut_module_consumer_tests.cpp")
   target_link_libraries(ut_module_consumer_tests PRIVATE ${PROJECT_NAME}::${PROJECT_NAME})
