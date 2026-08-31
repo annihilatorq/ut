@@ -14,37 +14,37 @@ suite tests = [] {
    "double"_test = [] {
       double v = 42.1;
       expect(42.1 == v) << "v is not 42.1";
-      expect[42.1 == v] << "a fatal error!";
+      require(42.1 == v) << "a fatal error!";
    };
 
    // a runtime-only test because the lambda is mutable
    "double mutable"_test = []() mutable {
       double v = 42.1;
       expect(42.1 == v) << "v is not 42.1";
-      expect[42.1 == v] << "oh no!";
+      require(42.1 == v) << "oh no!";
    };
 
    "int"_test = [] {
       expect(5 + 4 == 9) << "bad";
-      expect[5 + 4 == 9] << "fatal";
+      require(5 + 4 == 9) << "fatal";
    };
 
    // a compile-time only test because the lambda is consteval
    "int consteval"_test = []() consteval {
       expect(5 + 4 == 9) << "bad";
-      expect[5 + 4 == 9] << "fatal";
+      require(5 + 4 == 9) << "fatal";
    };
 
    "string"_test = [] {
       std::string_view v = "Hello World";
       expect(v == "Hello World");
-      expect[v == "Hello World"];
+      require(v == "Hello World");
    };
 
    test("runtime named test") = [] {
       std::string_view v = "Hello World";
       expect(v == "Hello World");
-      expect[v == "Hello World"];
+      require(v == "Hello World");
    };
 
    "throws"_test = []() mutable { expect(throws([] { throw std::runtime_error("I throw!"); })); };

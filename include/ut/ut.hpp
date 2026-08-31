@@ -66,7 +66,8 @@ namespace ut
 {
    namespace detail
    {
-      constexpr bool fatal = true;
+      struct fatal_assertion final
+      {};
 
       template <class>
       constexpr auto is_mutable_lambda_v = false;
@@ -147,8 +148,6 @@ namespace ut
          std::string_view file_name{};
          uint_least32_t line{};
       };
-      struct fatal
-      {};
       struct exception
       {
          std::string_view type{};
@@ -206,7 +205,6 @@ namespace ut
             os << '\n';
          }
       }
-      constexpr auto on(const events::fatal&) {}
       template <class Msg>
       constexpr auto on(const events::log<Msg>& event)
       {
@@ -282,14 +280,6 @@ namespace ut
          ++summary.asserts[events::summary::FAILED];
          outputter.on(event);
       }
-      constexpr auto on(const events::fatal& event)
-      {
-         ++summary.tests[events::summary::FAILED];
-         outputter.on(event);
-         outputter.on(summary);
-         std::exit(1);
-      }
-
       ~reporter()
       { // non constexpr
          outputter.on(summary);
@@ -331,6 +321,9 @@ namespace ut
 
          try {
             test();
+         }
+         // Already reported at the failed require(); thrown only to end the test
+         catch (const fatal_assertion&) {
          }
          // std::logic_error-s
          catch (const std::domain_error& e) {
@@ -703,9 +696,9 @@ namespace ut
 #endif
    }
 
-   constexpr struct
+   template <bool Fatal>
+   struct expect_t final
    {
-      template <bool Fatal>
       struct eval final
       {
          template <class T>
@@ -719,11 +712,6 @@ namespace ut
             }
             else {
                cfg.reporter.on(events::assertion{passed, loc.file_name(), loc.line()});
-               if (not passed) {
-                  if constexpr (Fatal) {
-                     cfg.reporter.on(events::fatal{});
-                  }
-               }
             }
          }
          bool passed{};
@@ -734,25 +722,8 @@ namespace ut
       constexpr auto operator()(T&& test_passed,
                                 const std::source_location& loc = std::source_location::current()) const
       {
-         return log{eval<not detail::fatal>{test_passed, loc}.passed};
+         return log{eval{test_passed, loc}.passed};
       }
-
-#if __cpp_multidimensional_subscript >= 202211L && !defined(_MSC_VER)
-      template <class T>
-         requires std::convertible_to<T, bool>
-      constexpr auto operator[](T&& test_passed,
-                                const std::source_location& loc = std::source_location::current()) const
-      {
-         return log{eval<detail::fatal>{test_passed, loc}.passed};
-      }
-#else
-      template <class T>
-         requires std::convertible_to<T, bool>
-      constexpr auto operator[](T&& test_passed) const
-      {
-         return log{eval<detail::fatal>{test_passed, std::source_location::current()}.passed};
-      }
-#endif
 
      private:
       struct log final
@@ -765,8 +736,28 @@ namespace ut
             cfg.outputter.on(events::log<Msg>{msg, passed});
             return *this;
          }
+
+         // Thrown from the destructor rather than inside eval so that '<<'
+         // message following assertion reaches the output first
+         constexpr ~log() noexcept(not Fatal)
+         {
+            if constexpr (Fatal) {
+               if (not passed) {
+#if __cpp_exceptions
+                  if (std::uncaught_exceptions() == 0) {
+                     throw detail::fatal_assertion{};
+                  }
+#else
+                  std::exit(1);
+#endif
+               }
+            }
+         }
       };
-   } expect{};
+   };
+
+   inline constexpr expect_t<false> expect{};
+   inline constexpr expect_t<true> require{};
 
    struct suite final
    {
