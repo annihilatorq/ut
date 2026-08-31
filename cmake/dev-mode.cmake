@@ -102,6 +102,12 @@ set_tests_properties(ut_exception_non_std PROPERTIES
    PASS_REGULAR_EXPRESSION "threw unknown exception"
 )
 
+# Test: any crash (nullptr access, etc.) should be reported with optional stacktrace
+add_executable(ut_crash_handling_tests "${PROJECT_SOURCE_DIR}/tests/ut_crash_handling_tests.cpp")
+target_link_libraries(ut_crash_handling_tests PRIVATE ${PROJECT_NAME}::${PROJECT_NAME})
+
+add_test(NAME ut_crash_handling COMMAND ut_crash_handling_tests)
+
 if (UT_ENABLE_MODULES)
   add_executable(ut_module_consumer_tests "${PROJECT_SOURCE_DIR}/tests/ut_module_consumer_tests.cpp")
   target_link_libraries(ut_module_consumer_tests PRIVATE ${PROJECT_NAME}::${PROJECT_NAME})
