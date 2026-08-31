@@ -55,6 +55,20 @@ Otherwise CMake fails with `Experimental 'import std' support not enabled when d
 
 The value above is the one for CMake 4.4. Each release publishes its own in CMake's `Help/dev/experimental.rst`, and the table at the top of ut's `CMakeLists.txt` lists those known to work.
 
+#### Uncaught exceptions
+
+An exception that escapes a test body is reported as a failure and the remaining
+tests still run, instead of reaching `std::terminate`.
+
+```
+FAILED "reads config" threw std::system_error: No such file or directory [generic:2 (No such file or directory)]
+FAILED "parses input" threw std::out_of_range: basic_string::at: __n (which is 9) >= this->size() (which is 2)
+FAILED "custom" threw 8my_error: custom
+FAILED "not an exception" threw unknown exception
+```
+
+Anything that is not thrown as an object derived from `std::exception` is reported as unknown exception.
+
 ### Running Specific Tests
 
 Use the `UT_RUN` environment variable to run specific tests by name:
